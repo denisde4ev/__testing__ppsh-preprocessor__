@@ -8,29 +8,40 @@ case $1 in --help)
 esac
 
 
-main() {
-	IFS=''
+IFS=''
 
+## stack__if_lvl=''
+## stack__if_bool=''
+## stack__line_num=''
+## stack__includefile=''
+ppsh() {
 	if_lvl=0
-	unset if_bool
+	if_bool=''
 	line_num=0
 
 	while read -r line; do
-		line_s=${line##*[! 	]} # just end of line spaces/tabs (not needed for all preprocess commands)
-		
+		line_num=$(( line_num + 1 ))
+		line_s=${line##*[! 	]} # just end of line spaces/tabs
+
 		case $line in
+			"#ifdef "*)      ppsh_ifdef || exit; continue;;
+			"#else$line_s")  ppsh_else  || exit; continue;;
+			"#endif$line_s") ppsh_endif || exit; continue;;
+		esac
+
+		${if_bool-continue} # parsen only if/else/endif headers when last `#ifdef` header got false
+
+		case $line in
+
 			"#define "*) ppsh_define;;
 			"#undef "*) ppsh_undef;;
 
 			"#dumpvar "*) ppsh_dumpvar;;
 
-			"#ifdef "*) ppsh_ifdef;;
-			"#else$line_s") ppsh_else;;
-			"#endif$line_s") ppsh_endif;;
 
 			"#include "*) ppsh_include;;
 			*) printf %s\\n "$line" || exit;; # exit when can not print
-		esac || break
+		esac || exit
 	done
 }
 
@@ -45,6 +56,7 @@ log() {
 }
 
 in_line() {
+	## printf %s\\n ", in ${includefile+file='$includefile' }line ${line_num}: '$line'"
 	printf %s\\n ", in line ${line_num}: '$line'"
 }
 
@@ -57,6 +69,15 @@ getvar() {
 	esac
 }
 
+interpred_quote__toi() {
+	case $1 in
+		\'*\'*\') err "todo: interpred nested unix style quotes in interpred_quote fn$(in_line)";;  #fix'
+		\'*\') i=${1#\'};  i=${i%\'};; 
+		\"*\") err "todo: parsing quotest for double quotes$(in_line)";;  #fix"
+		\<*\>) err "todo: parsing quotest for diamond quotes$(in_line)";;
+		*) err "failed to parse quotes$(in_line)";;
+	esac
+}
 
 ppsh_define() {
 	getvar
@@ -72,17 +93,40 @@ ppsh_dumpvar() {
 }
 
 ppsh_ifdef() {
-	err "todo ppsh_ifdef fn"
+	log err "todo ppsh_ifdef fn"
+	case ${if_bool-0} in 0|-) # when last `if` got false|not in eval, do not check inner `if`-s, just count them
+		stack__if_bool=${stack__if_bool}:- # todo thest if this is right when implemented
+		return
+	esac
+
+	eval "\${ppsh_var_${var}-unset if_bool}"
+	stack__if_bool=\$stack__if_bool:${if_bool+1}${if_bool-0} # todo var of 0/1
 }
 ppsh_else() {
 	err "todo ppsh_else fn"
+	case $stack__if_bool in *-) return; esac # consider: it does not seems right to be using `sack_*` var for this check
+
+	# TODO: known bug/feature(a fun one) when 2 else-s without if
+	# something like: `sh -c 'if true; then echo 1; else echo 2; else echo 3; fi'`
+	# then else will flip `if_bool` var and coninue and will not throw error...
+	case ${if_bool+x} in
+		x) unset if_bool;;
+		*) if_bool;;
+	esac
 }
 ppsh_endif() {
 	err "todo ppsh_endif fn"
 }
 
 ppsh_include() {
+	includefile=${line#"#"}
+	includefile=${includefile#" "}
+	includefile=${includefile#*" "}
+	includefile=$(interpred_quote "$includefile") || err "can not parse include file name$(in_line)"
+
+	case $includefile in */*) cd "${readfile%/*}" || exit; esac
 	err "todo ppsh_include fn"
+	case $includefile in */*) cd "$OLDPWD" || err "can't \`cd\` to previous dir: OLDPWD='$OLDPWD'" $?; esac
 }
 
 
@@ -92,7 +136,9 @@ ppsh_include() {
 readfile=${1-"-"}
 
 case $readfile in
-	-) main;;
-	*) main < "$readfile";;
+	-) ppsh;;
+	*)
+		case $readfile in */*) cd "${readfile%/*}" || exit; esac
+		ppsh < "$readfile"
+	;;
 esac
-
